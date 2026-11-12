@@ -1,0 +1,269 @@
+// ==============================================================================
+// Prisma Schema - LedgerFlow Core Engine
+// ==============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------------------------
+// Enums
+// ------------------------------------------------------------------------------
+enum UserRole {
+  ADMIN
+  FINANCE_OPERATOR
+  AUDITOR
+}
+
+enum PaymentGateway {
+  STRIPE
+  TRANSBANK
+  MERCADOPAGO
+  MANUAL
+}
+
+enum TransactionStatus {
+  PENDING
+  PROCESSED
+  FAILED
+  REFUNDED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  VOIDED
+}
+
+enum ReconciliationJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum MovementStatus {
+  PENDING
+  RECONCILED
+  DISCREPANCY
+}
+
+enum DiscrepancyReason {
+  NONE
+  AMOUNT_MISMATCH
+  DATE_OUT_OF_BOUNDS
+  TRANSACTION_NOT_FOUND
+  DUPLICATE_EXTERNAL_REF
+  CURRENCY_MISMATCH
+}
+
+// ------------------------------------------------------------------------------
+// Multi-Tenancy & Identity Models
+// ------------------------------------------------------------------------------
+model Tenant {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(120)
+  slug      String   @unique @db.VarChar(60)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users              User[]
+  customers          Customer[]
+  transactions       Transaction[]
+  invoices           Invoice[]
+  reconciliationJobs ReconciliationJob[]
+  bankMovements      BankMovement[]
+  auditLogs          AuditLog[]
+
+  @@map("tenants")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  email        String   @db.VarChar(160)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  firstName    String   @map("first_name") @db.VarChar(80)
+  lastName     String   @map("last_name") @db.VarChar(80)
+  role         UserRole @default(FINANCE_OPERATOR)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reconciliationJobs ReconciliationJob[]
+  auditLogs          AuditLog[]
+
+  @@unique([tenantId, email], name: "uq_user_tenant_email")
+  @@index([tenantId])
+  @@map("users")
+}
+
+// ------------------------------------------------------------------------------
+// Customer & Financial Ledger
+// ------------------------------------------------------------------------------
+model Customer {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  externalCustomerId String   @map("external_customer_id") @db.VarChar(100)
+  name               String   @db.VarChar(160)
+  email              String   @db.VarChar(160)
+  balance            Decimal  @default(0.00) @db.Decimal(14, 2)
+  currency           String   @default("CLP") @db.VarChar(3)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  invoices     Invoice[]
+
+  @@unique([tenantId, externalCustomerId], name: "uq_customer_tenant_external_id")
+  @@index([tenantId])
+  @@index([tenantId, email])
+  @@map("customers")
+}
+
+model Transaction {
+  id                  String            @id @default(uuid()) @db.Uuid
+  tenantId            String            @map("tenant_id") @db.Uuid
+  customerId          String            @map("customer_id") @db.Uuid
+  amount              Decimal           @db.Decimal(14, 2)
+  currency            String            @default("CLP") @db.VarChar(3)
+  status              TransactionStatus @default(PENDING)
+  gateway             PaymentGateway    @default(MANUAL)
+  externalReferenceId String            @map("external_reference_id") @db.VarChar(120)
+  metadata            Json?             @db.JsonB
+  processedAt         DateTime?         @map("processed_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer      Customer       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  invoice       Invoice?
+  bankMovements BankMovement[]
+
+  @@unique([tenantId, externalReferenceId], name: "uq_tx_tenant_external_ref")
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, customerId])
+  @@map("transactions")
+}
+
+model Invoice {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  customerId    String        @map("customer_id") @db.Uuid
+  transactionId String        @unique @map("transaction_id") @db.Uuid
+  invoiceNumber String        @map("invoice_number") @db.VarChar(80)
+  subtotal      Decimal       @db.Decimal(14, 2)
+  tax           Decimal       @default(0.00) @db.Decimal(14, 2)
+  total         Decimal       @db.Decimal(14, 2)
+  currency      String        @default("CLP") @db.VarChar(3)
+  status        InvoiceStatus @default(ISSUED)
+  issuedAt      DateTime      @default(now()) @map("issued_at")
+  notes         String?       @db.Text
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer    Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, invoiceNumber], name: "uq_invoice_tenant_number")
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, customerId])
+  @@map("invoices")
+}
+
+// ------------------------------------------------------------------------------
+// Ingestion & Automated Reconciliation Engine
+// ------------------------------------------------------------------------------
+model ReconciliationJob {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  tenantId           String                  @map("tenant_id") @db.Uuid
+  userId             String                  @map("user_id") @db.Uuid
+  fileName           String                  @map("file_name") @db.VarChar(255)
+  totalRecords       Int                     @default(0) @map("total_records")
+  processedRecords   Int                     @default(0) @map("processed_records")
+  matchedRecords     Int                     @default(0) @map("matched_records")
+  discrepancyRecords Int                     @default(0) @map("discrepancy_records")
+  status             ReconciliationJobStatus @default(QUEUED)
+  errorLog           String?                 @map("error_log") @db.Text
+  completedAt        DateTime?               @map("completed_at")
+  createdAt          DateTime                @default(now()) @map("created_at")
+  updatedAt          DateTime                @updatedAt @map("updated_at")
+
+  // Relations
+  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  movements BankMovement[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@map("reconciliation_jobs")
+}
+
+model BankMovement {
+  id                   String            @id @default(uuid()) @db.Uuid
+  tenantId             String            @map("tenant_id") @db.Uuid
+  reconciliationJobId  String            @map("reconciliation_job_id") @db.Uuid
+  externalReferenceId  String            @map("external_reference_id") @db.VarChar(120)
+  rawReference         String?           @map("raw_reference") @db.VarChar(255)
+  amount               Decimal           @db.Decimal(14, 2)
+  currency             String            @default("CLP") @db.VarChar(3)
+  movementDate         DateTime          @map("movement_date")
+  description          String?           @db.VarChar(255)
+  status               MovementStatus    @default(PENDING)
+  discrepancyReason    DiscrepancyReason @default(NONE) @map("discrepancy_reason")
+  matchedTransactionId String?           @map("matched_transaction_id") @db.Uuid
+  reconciledAt         DateTime?         @map("reconciled_at")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  tenant             Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reconciliationJob  ReconciliationJob @relation(fields: [reconciliationJobId], references: [id], onDelete: Cascade)
+  matchedTransaction Transaction?      @relation(fields: [matchedTransactionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, externalReferenceId])
+  @@index([tenantId, status])
+  @@index([reconciliationJobId])
+  @@map("bank_movements")
+}
+
+// ------------------------------------------------------------------------------
+// Audit Trail
+// ------------------------------------------------------------------------------
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  action    String   @db.VarChar(80)
+  entity    String   @db.VarChar(80)
+  entityId  String   @map("entity_id") @db.VarChar(100)
+  oldData   Json?    @map("old_data") @db.JsonB
+  newData   Json?    @map("new_data") @db.JsonB
+  ipAddress String?  @map("ip_address") @db.VarChar(45)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, entity, entityId])
+  @@map("audit_logs")
+}
