@@ -1,0 +1,36 @@
+{
+  "name": "ledgerflow-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Full-stack Payment Reconciliation & Automated Billing Engine built with NestJS, TypeScript, PostgreSQL, and React.",
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "dev:api": "pnpm --filter @ledgerflow/api dev",
+    "dev:web": "pnpm --filter @ledgerflow/web dev",
+    "build": "pnpm --recursive run build",
+    "lint": "pnpm --recursive run lint",
+    "test": "pnpm --recursive run test",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "db:migrate": "pnpm --filter @ledgerflow/api prisma:migrate",
+    "db:generate": "pnpm --filter @ledgerflow/api prisma:generate",
+    "db:seed": "pnpm --filter @ledgerflow/api prisma:seed",
+    "db:studio": "pnpm --filter @ledgerflow/api prisma:studio"
+  },
+  "keywords": [
+    "fintech",
+    "reconciliation",
+    "billing",
+    "nestjs",
+    "react",
+    "typescript",
+    "postgresql",
+    "prisma",
+    "bullmq",
+    "multi-tenant"
+  ],
+  "author": "LedgerFlow Team",
+  "license": "MIT",
+  "packageManager": "pnpm@12.5.1"
+}
