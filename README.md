@@ -1,28 +1,38 @@
-# LedgerFlow ⚡
+# LedgerFlow
 
-> **Full-stack Payment Reconciliation & Automated Billing Engine built with NestJS, TypeScript, PostgreSQL, and React.**
+Multi-tenant payment reconciliation and automated billing platform built with NestJS, React, PostgreSQL, and Redis.
 
 [![CI Pipeline](https://github.com/diego/LedgerFlow/actions/workflows/ci.yml/badge.svg)](https://github.com/diego/LedgerFlow/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node](https://img.shields.io/badge/Node-v22+-green.svg)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/Node-v20+-green.svg)](https://nodejs.org/)
 [![pnpm](https://img.shields.io/badge/pnpm-v12+-orange.svg)](https://pnpm.io/)
 
 ---
 
-## 📌 Contexto de Negocio & Problema
+## Overview
 
-**LedgerFlow** es una plataforma SaaS B2B multi-tenant diseñada para resolver la fricción operativa y financiera entre pasarelas de pago (Transbank, Stripe, Mercado Pago), cobros transaccionales masivos y emisión de facturación electrónica.
+LedgerFlow processes transactional payments, reconciles bank statements against gateway transactions, and issues billing records with strict tenant isolation and ACID guarantees.
 
-### ¿Qué problemas resuelve?
-1. **Descalce de Cartolas Bancarias vs Pasarelas:** Las empresas procesan miles de cobros diarios que no siempre coinciden exactamente con los depósitos bancarios debido a comisiones ocultas, desfases de liquidación (T+1 / T+2) o rechazos tardíos.
-2. **Inconsistencias Contables y Registros Huérfanos:** Fallos en la red o desconexiones pueden generar transacciones aprobadas sin factura o saldos de clientes desactualizados sin garantías transaccionales ACID.
-3. **Fugas de Datos entre Organizaciones:** Requerimiento imperativo de segregación estricta de datos (*Multi-Tenancy*) a nivel de base de datos y transporte HTTP mediante RBAC.
+### Key Capabilities
+
+- **Automated Reconciliation**: Asynchronous batch processing of bank statements via BullMQ queues and Redis.
+- **ACID Invoicing**: Atomic transaction and invoice generation via Prisma transactions.
+- **Multi-Tenancy**: Data segregation by `tenant_id` across database queries, HTTP guards, and authentication tokens.
+- **Role-Based Access Control (RBAC)**: Role validation (`ADMIN`, `FINANCE_OPERATOR`, `AUDITOR`) via JWT strategies and decorators.
 
 ---
 
-## 🏛️ Arquitectura del Sistema
+## System Architecture
 
-### Monorepo Workspaces (`pnpm`)
+### Workspace Structure
+
+The project is structured as a `pnpm` monorepo:
+
+| Path | Description | Tech Stack |
+|---|---|---|
+| `apps/api` | Backend API and background workers | NestJS, Prisma ORM, BullMQ, Passport JWT, Swagger |
+| `apps/web` | Frontend management dashboard | React 19, Vite, Tailwind CSS, TanStack Query/Table, Zustand |
+| `packages/types` | Shared contracts, DTO interfaces, and enums | TypeScript, tsup |
 
 ```mermaid
 graph TD
@@ -31,8 +41,8 @@ graph TD
     Root --> Packages[packages/]
 
     Apps --> API[apps/api: NestJS + Prisma + BullMQ]
-    Apps --> Web[apps/web: React + Vite + Tailwind + TanStack Query]
-    Packages --> Types[packages/types: Shared Contracts & Domain Models]
+    Apps --> Web[apps/web: React + Vite + Tailwind CSS]
+    Packages --> Types[packages/types: Shared Domain Models]
 
     API --> Types
     Web --> Types
@@ -40,37 +50,37 @@ graph TD
     Swagger -.-> Web
 ```
 
-### Flujo de Conciliación en Segundo Plano (Worker BullMQ + Redis)
+### Reconciliation Workflow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Operador as Operador Financiero
-    participant Web as apps/web (React)
-    participant API as apps/api (NestJS)
+    actor Operator as Finance Operator
+    participant Web as Web (React)
+    participant API as API (NestJS)
     participant Queue as Redis Queue (BullMQ)
     participant Worker as Reconciliation Worker
     participant DB as PostgreSQL (Prisma)
 
-    Operador->>Web: Sube cartola (CSV / JSON)
+    Operator->>Web: Upload bank statement (CSV / JSON)
     Web->>API: POST /api/v1/reconciliation/upload
-    API->>DB: Crea registro ReconciliationJob (status: QUEUED)
-    API->>Queue: Encola Job con tenant_id y archivo
-    API-->>Web: Responde 202 Accepted (job_id)
-    Web-->>Operador: Muestra barra de progreso y estado en polling
-    Queue->>Worker: Procesa lote de movimientos
-    Worker->>DB: Coteja referencia externa y monto vs Transactions
-    alt Coincide monto y fecha
-        Worker->>DB: Actualiza status a RECONCILED
-    else Discrepancia encontrada
-        Worker->>DB: Marca DISCREPANCY con motivo (AMOUNT_MISMATCH / NOT_FOUND)
+    API->>DB: Insert ReconciliationJob (status: QUEUED)
+    API->>Queue: Enqueue job payload with tenant_id
+    API-->>Web: 202 Accepted (job_id)
+    Web-->>Operator: Poll status and display progress
+    Queue->>Worker: Process statement movements
+    Worker->>DB: Compare external reference and amount against Transactions
+    alt Valid match
+        Worker->>DB: Update movement to RECONCILED
+    else Discrepancy found
+        Worker->>DB: Flag DISCREPANCY (AMOUNT_MISMATCH / NOT_FOUND)
     end
-    Worker->>DB: Finaliza ReconciliationJob (status: COMPLETED)
+    Worker->>DB: Mark ReconciliationJob as COMPLETED
 ```
 
 ---
 
-## 🗄️ Modelo Relacional de Datos (PostgreSQL)
+## Data Model
 
 ```mermaid
 erDiagram
@@ -157,73 +167,77 @@ erDiagram
 
 ---
 
-## 🚀 Inicio Rápido en Local
+## Getting Started
 
-### Prerrequisitos
-* **Node.js**: `>= 20.x` (probado en Node 22+)
-* **pnpm**: `>= 9.x`
-* **Docker & Docker Compose**
+### Prerequisites
 
-### 1. Clonar el repositorio y configurar variables de entorno
+- **Node.js**: `>= 20.x`
+- **pnpm**: `>= 9.x`
+- **Docker** and **Docker Compose**
 
-```bash
-git clone https://github.com/diego/LedgerFlow.git
-cd LedgerFlow
-cp .env.example .env
-```
+### Installation and Setup
 
-### 2. Levantar la infraestructura (PostgreSQL 16 & Redis 7)
+1. **Clone the repository and configure environment variables:**
+   ```bash
+   git clone https://github.com/diego/LedgerFlow.git
+   cd LedgerFlow
+   cp .env.example .env
+   ```
 
-```bash
-pnpm docker:up
-```
+2. **Start infrastructure services (PostgreSQL 16 & Redis 7):**
+   ```bash
+   pnpm docker:up
+   ```
 
-Verificar que los contenedores estén saludables:
-```bash
-docker compose ps
-```
+3. **Install dependencies and generate Prisma client:**
+   ```bash
+   pnpm install
+   pnpm db:generate
+   ```
 
-### 3. Instalar dependencias e inicializar Prisma
+4. **Run database migrations and initial seed:**
+   ```bash
+   pnpm db:migrate
+   pnpm db:seed
+   ```
 
-```bash
-pnpm install
-pnpm db:generate
-```
+5. **Start development servers:**
+   ```bash
+   pnpm dev
+   ```
 
-### 4. Ejecutar la base de datos y migraciones iniciales
-
-```bash
-pnpm db:migrate
-pnpm db:seed
-```
-
-### 5. Iniciar los entornos de desarrollo
-
-* Iniciar tanto la API como la interfaz web en paralelo:
-```bash
-pnpm dev
-```
-
-* O individualmente:
-```bash
-pnpm dev:api    # NestJS API en http://localhost:4000
-pnpm dev:web    # React Vite en http://localhost:5173
-```
+   Individual services can also be run separately:
+   - Backend API (`http://localhost:4000`): `pnpm dev:api`
+   - Frontend application (`http://localhost:5173`): `pnpm dev:web`
 
 ---
 
-## 📖 Documentación Interactiva de la API
+## API Documentation
 
-Con la API en ejecución, accede a la documentación OpenAPI/Swagger en:
-👉 **[http://localhost:4000/api/docs](http://localhost:4000/api/docs)**
+When the API server is running, the interactive OpenAPI/Swagger interface is accessible at:
 
-Permite explorar los esquemas DTO, probar autenticación con JWT Bearer y validar las respuestas HTTP en tiempo real.
+**[http://localhost:4000/api/docs](http://localhost:4000/api/docs)**
 
 ---
 
-## 🛡️ Seguridad y Buenas Prácticas
+## Available Scripts
 
-* **Cero `any`:** Validación de tipos estricta en TypeScript de extremo a extremo.
-* **Transaccionalidad ACID:** Operaciones de cobro y emisión de factura encapsuladas en `prisma.$transaction`.
-* **Multi-Tenancy Garantizado:** Decoradores `@TenantId()` y filtros obligatorios por `tenant_id` en cada consulta relacional.
-* **Spec-Driven Development:** Contratos Swagger generados automáticamente para sincronización con el frontend.
+| Command | Description |
+|---|---|
+| `pnpm dev` | Starts all applications in parallel |
+| `pnpm dev:api` | Starts the NestJS API in watch mode |
+| `pnpm dev:web` | Starts the Vite development server |
+| `pnpm build` | Builds all packages and applications |
+| `pnpm test` | Runs test suites across the monorepo |
+| `pnpm docker:up` | Starts PostgreSQL and Redis containers |
+| `pnpm docker:down` | Stops infrastructure containers |
+| `pnpm db:migrate` | Applies Prisma migrations |
+| `pnpm db:generate` | Generates Prisma client types |
+| `pnpm db:seed` | Seeds database with initial tenant and transaction data |
+| `pnpm db:studio` | Launches Prisma Studio web interface |
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
